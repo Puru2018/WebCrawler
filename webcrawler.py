@@ -7,6 +7,7 @@ import requests
 from urllib.parse import urljoin, urlparse
 from collections import deque
 from tqdm import tqdm
+from dotenv import load_dotenv
 
 # Simple crawler to download documents from a site and its subpages.
 # Usage (from VS Code terminal):
@@ -18,8 +19,38 @@ ALLOWED_EXT = {".pdf", ".docx", ".doc", ".txt", ".rtf"}
 REQUEST_TIMEOUT = 10
 SLEEP_BETWEEN_REQUESTS = 0.2
 INDEX_FILENAME = "download_index.json"
+AZURE_STORAGE_SHARE = "crawldocs"
+AZURE_DOCS_DIRECTORY = "docs"
+
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
+load_dotenv()
+
+def get_azure_client():
+    conn_str = os.getenv("POWERNOVA_AZURE_STORAGE_CONNECTION_STRING")
+
+    if conn_str == "" or conn_str == None:
+        return None
+
+    service = ShareServiceClient.from_connection_string(conn_str=conn_str)
+    shares = service.get_share_client(AZURE_STORAGE_SHARE) 
+    crawl_client = shares.get_directory_client(AZURE_DOCS_DIRECTORY)
+    #crawl_client.create_directory()
+    return crawl_client
+
+def upload_to_azure(path, name):
+    try:
+        client = get_azure_client()
+        if client != None:
+            # Upload a file to the directory
+            print("File path: {}".format(path))
+            with open(path, "rb") as source:
+                print("Uploading to azure: {}".format(name))
+                content = source.read()
+                client.upload_file(file_name=name, data=content)
+    except:
+        return False
+    return True
 
 def is_html_response(resp):
     ct = resp.headers.get("Content-Type", "")
@@ -113,7 +144,9 @@ def download_url(url, out_dir=DOWNLOAD_DIR, session=None, index=None):
                 for chunk in r.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
-
+            if upload_to_azure(out_path, fname):
+                print("Removing file: {}".format(out_path))
+                os.remove(out_path)
             # Update index if present
             if index is not None:
                 index[url] = {
@@ -219,11 +252,12 @@ def crawl_and_download(start_url, depth=2, max_pages=500, out_dir=DOWNLOAD_DIR, 
     _save_index(index, out_dir)
     return downloaded
 
+from azure.storage.fileshare import ShareServiceClient
 
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Crawl a site and download documents (.pdf .docx .doc .txt).")
-    parser.add_argument("start_url", default="https://www.caiso..com/generation-transmission/generation", help="Starting URL to crawl")
+    parser.add_argument("--start_url", default="https://www.caiso.com/generation-transmission/generation", help="Starting URL to crawl")
     parser.add_argument("--depth", type=int, default=2, help="Crawl depth (default 2)")
     parser.add_argument("--outdir", default=DOWNLOAD_DIR, help="Download directory")
     parser.add_argument("--max-pages", type=int, default=500, help="Max pages to visit")
@@ -235,7 +269,7 @@ def main():
     files = crawl_and_download(start, depth=args.depth, max_pages=args.max_pages, out_dir=args.outdir)
     print(f"\nFinished. Downloaded {len(files)} files:")
     for f in files:
-        print(" -", f)
+       print(" -", f)
 
 
 if __name__ == "__main__":
